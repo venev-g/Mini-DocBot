@@ -22,10 +22,13 @@ st.write(
 )
 st.caption("Powered by Gemini✨")
 
+# Initialize session state variables
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "Hello! I am a medical chatbot. How can I help you today?"}]
+    st.session_state.messages = [{"role": "assistant", "content": "Upload a PDF document, and I'll be ready to answer your questions about it!"}]
+if "pdf_processed" not in st.session_state:
+    st.session_state.pdf_processed = False
 
-# extract text from PDFs
+# Extract text from PDFs
 def get_pdf_text(pdf_docs):
     text = ""
     for pdf in pdf_docs:
@@ -35,20 +38,20 @@ def get_pdf_text(pdf_docs):
             text += page.extract_text()
     return text
 
-# plit text into chunks
+# Split text into chunks
 def get_text_chunks(text):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
     chunks = text_splitter.split_text(text)
     return chunks
 
-# create and save FAISS vector store
+# Create and save FAISS vector store
 def get_vector_store(text_chunks):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    save_path = os.path.expanduser("./faiss_index")  #writable path
+    save_path = os.path.expanduser("./faiss_index")  # writable path
     vector_store.save_local(save_path)
 
-# load conversational AI chain
+# Load conversational AI chain
 def get_conversational_chain():
     prompt_template = """
     Answer the question as detailed as possible from the provided context, make sure to provide all the details. If the answer is not in
@@ -63,7 +66,7 @@ def get_conversational_chain():
     chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
     return chain
 
-# handling user input and generate responses
+# Handling user input and generate responses
 def user_input(user_question):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004", google_api_key=api_key)
     new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
@@ -72,24 +75,46 @@ def user_input(user_question):
     response = chain.invoke({"input_documents": docs, "question": user_question}, return_only_outputs=True)
     return response["output_text"]
 
-# display all messages in the chat history
+# PDF upload section below the description
+st.subheader("Upload Documents")
+uploaded_files = st.file_uploader("Upload your PDF files", type=["pdf"], accept_multiple_files=True)
+
+if uploaded_files and not st.session_state.pdf_processed:
+    with st.spinner("Processing PDFs..."):
+        # Extract text from PDFs
+        raw_text = get_pdf_text(uploaded_files)
+        
+        # Get text chunks
+        text_chunks = get_text_chunks(raw_text)
+        
+        # Create and save vector store
+        get_vector_store(text_chunks)
+        
+        st.session_state.pdf_processed = True
+        st.success("PDF processed successfully!")
+        st.session_state.messages = [{"role": "assistant", "content": "I've processed your documents! Ask me anything about them."}]
+        st.rerun()
+
+# Main chat interface
+st.subheader("Chat with your documents")
+
+# Display all messages in the chat history
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
 # Handle new user input
 if user_question := st.chat_input():
-    # Add user message to session state
-    st.session_state.messages.append({"role": "user", "content": user_question})
-    st.chat_message("user").write(user_question)
-    
-    # Compile the conversation history
-    conversation_history = ""
-    for msg in st.session_state.messages:
-        conversation_history += f"{msg['role']}: {msg['content']}\n"
-    
-    # Generate the response based on the conversation history
-    response = user_input(conversation_history + "\nuser: " + user_question)
-    
-    # Add assistant message to session state
-    st.session_state.messages.append({"role": "assistant", "content": response})
-    st.chat_message("assistant").write(response)
+    if not st.session_state.pdf_processed:
+        st.warning("Please upload a PDF document first.")
+    else:
+        # Add user message to session state
+        st.session_state.messages.append({"role": "user", "content": user_question})
+        st.chat_message("user").write(user_question)
+        
+        with st.spinner("Thinking..."):
+            # Generate the response
+            response = user_input(user_question)
+            
+            # Add assistant message to session state
+            st.session_state.messages.append({"role": "assistant", "content": response})
+            st.chat_message("assistant").write(response)
